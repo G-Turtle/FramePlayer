@@ -7,7 +7,7 @@ Phase 4: 재생바(seek bar) — 진행 표시 + 드래그로 초 단위 이동,
 
 import os
 
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QAction, QPalette, QColor, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -86,6 +86,8 @@ class MainWindow(QMainWindow):
         palette = self.video_widget.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0))
         self.video_widget.setPalette(palette)
+        # 영상 더블클릭으로 풀스크린 토글 (VLC 마우스 입력을 꺼서 이벤트가 Qt로 전달됨)
+        self.video_widget.installEventFilter(self)
         layout.addWidget(self.video_widget, stretch=1)
 
         # 재생바 (시간 라벨 + 슬라이더)
@@ -174,6 +176,28 @@ class MainWindow(QMainWindow):
         add(Qt.Key.Key_Right, lambda: self.jump(self._jump_seconds))
         add(Qt.Key.Key_Comma, self.step_backward)    # ',' 한 프레임 뒤로
         add(Qt.Key.Key_Period, self.step_forward)    # '.' 한 프레임 앞으로
+        add(Qt.Key.Key_F, self.toggle_fullscreen)
+        add(Qt.Key.Key_Escape, self.exit_fullscreen)
+
+    def eventFilter(self, obj, event):
+        """영상 위젯 더블클릭 시 풀스크린을 토글한다."""
+        if obj is self.video_widget and event.type() == QEvent.Type.MouseButtonDblClick:
+            self.toggle_fullscreen()
+            return True
+        return super().eventFilter(obj, event)
+
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.exit_fullscreen()
+        else:
+            self.menuBar().hide()
+            self.showFullScreen()
+
+    def exit_fullscreen(self):
+        # 풀스크린일 때만 동작 (Esc를 일반 상태에서 눌러도 영향 없게)
+        if self.isFullScreen():
+            self.menuBar().show()
+            self.showNormal()
 
     def closeEvent(self, event):
         """앱 종료 시 VLC 리소스를 정리한 뒤 닫는다."""
