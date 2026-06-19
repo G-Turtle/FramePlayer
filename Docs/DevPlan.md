@@ -23,7 +23,7 @@
 - [x] Phase 4: 재생바(Seek bar) — 진행 표시 + 드래그 초 단위 이동
 - [x] Phase 5: 프레임 단위 앞/뒤 이동
 - [x] Phase 6: CLI 인자로 파일 경로 받기 (파일 연결 대비)
-- [ ] Phase 7: UX 보강 (단축키, 볼륨, 시간 표시, 풀스크린)
+- [x] Phase 7: UX 보강 (단축키, 볼륨, 시간 표시, 풀스크린)
 - [ ] Phase 8: PyInstaller 폴더 빌드 (VLC 런타임 번들 포함)
 - [ ] Phase 9: Inno Setup 인스톨러 + 레지스트리 파일 연결
 - [ ] Phase 10: GitHub Releases 배포 + 앱 내 업데이트 체크

@@ -265,13 +265,16 @@ class MainWindow(QMainWindow):
                 self._cached_fps = fps
 
         # 재생 중일 때만 get_time()으로 위치를 동기화한다.
-        # (일시정지 중에는 next_frame() 때문에 get_time()이 stale하므로 신뢰하지 않고,
-        #  프레임 이동/seek 메서드가 _position_ms와 UI를 직접 갱신한다.)
+        # (일시정지 중에는 프레임 이동/seek 메서드가 _position_ms와 UI를 직접 갱신한다.)
         if self.player.is_playing() and not self._user_dragging:
             t = self.player.get_time()
             if t >= 0:
                 self._position_ms = float(t)
                 self._update_seek_ui(t)
+
+        # 끝까지 재생되어 종료되면 버튼을 '재생'으로 되돌린다
+        if self.player.has_ended() and self.play_button.text() != "▶ 재생":
+            self.play_button.setText("▶ 재생")
 
     def _update_seek_ui(self, ms: int):
         """슬라이더와 현재시간 라벨을 주어진 위치(ms)로 갱신한다."""
@@ -298,6 +301,9 @@ class MainWindow(QMainWindow):
         if self.player.is_playing():
             self._pause()
         else:
+            # 끝까지 재생되어 종료된 상태면 stop으로 리셋 후 처음부터 재생한다
+            if self.player.has_ended():
+                self.player.stop()
             self.player.play()
             self.play_button.setText("⏸ 일시정지")
 
