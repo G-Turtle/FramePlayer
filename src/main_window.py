@@ -49,6 +49,10 @@ class MainWindow(QMainWindow):
         self._user_dragging = False   # 사용자가 슬라이더를 잡고 있는 동안 True
         self._duration_ms = 0         # 알려진 영상 길이 (슬라이더 범위 설정용)
 
+        # 프레임 이동용 FPS 캐시 (재생 후에야 유효, 없으면 기본 30fps)
+        self._cached_fps = 0.0
+        self._default_fps = 30.0
+
         self._build_ui()
         self._build_menu()
 
@@ -109,8 +113,16 @@ class MainWindow(QMainWindow):
         self.stop_button = QPushButton("⏹ 정지")
         self.stop_button.clicked.connect(self.stop)
 
+        self.prev_frame_button = QPushButton("◀ 프레임")
+        self.prev_frame_button.clicked.connect(self.step_backward)
+
+        self.next_frame_button = QPushButton("프레임 ▶")
+        self.next_frame_button.clicked.connect(self.step_forward)
+
         bar.addWidget(self.play_button)
         bar.addWidget(self.stop_button)
+        bar.addWidget(self.prev_frame_button)
+        bar.addWidget(self.next_frame_button)
         bar.addStretch(1)
         return bar
 
@@ -154,8 +166,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"Frame Player - {os.path.basename(path)}")
         self.play_button.setText("⏸ 일시정지")
 
-        # 새 파일이므로 재생바 상태 초기화 (길이는 타이머가 파싱 후 채운다)
+        # 새 파일이므로 재생바/FPS 상태 초기화 (길이·FPS는 타이머가 파싱 후 채운다)
         self._duration_ms = 0
+        self._cached_fps = 0.0
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setValue(0)
         self.current_label.setText("00:00")
@@ -168,6 +181,12 @@ class MainWindow(QMainWindow):
             self._duration_ms = length
             self.seek_slider.setRange(0, length)
             self.total_label.setText(format_time(length))
+
+        # FPS는 재생이 시작된 후에야 유효하므로 유효값을 한 번 캐시한다
+        if self._cached_fps <= 0:
+            fps = self.player.get_fps()
+            if fps and fps > 0:
+                self._cached_fps = fps
 
         # 사용자가 드래그 중이면 슬라이더 위치를 건드리지 않는다 (값 튐 방지)
         if not self._user_dragging:
@@ -201,3 +220,25 @@ class MainWindow(QMainWindow):
     def stop(self):
         self.player.stop()
         self.play_button.setText("▶ 재생")
+
+    def _effective_fps(self) -> float:
+        """프레임 이동 계산에 쓸 FPS. 캐시값이 없으면 기본값으로 폴백."""
+        return self._cached_fps if self._cached_fps > 0 else self._default_fps
+
+    def _pause_for_stepping(self):
+        """프레임 이동은 일시정지 상태에서 수행한다. 재생 중이면 멈춘다."""
+        if self.player.is_playing():
+            self.player.pause()
+            self.play_button.setText("▶ 재생")
+
+    def step_forward(self):
+        """한 프레임 앞으로."""
+        self._pause_for_stepping()
+        self.player.next_frame()
+
+    def step_backward(self):
+        """한 프레임 뒤로. (VLC 후진 API가 없어 시간 계산으로 seek)"""
+        self._pause_for_stepping()
+        frame_ms = round(1000.0 / self._effective_fps())
+        new_time = max(0, self.player.get_time() - frame_ms)
+        self.player.set_time(new_time)

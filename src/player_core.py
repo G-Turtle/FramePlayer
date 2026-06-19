@@ -61,6 +61,14 @@ class PlayerCore:
         """프레임레이트. 재생/파싱 전에는 0이 나올 수 있다."""
         return self._player.get_fps()
 
+    def next_frame(self) -> None:
+        """한 프레임 앞으로 이동한다. (일시정지 상태에서 사용)
+
+        libVLC는 후진 프레임 API가 없으므로 '뒤로 한 프레임'은
+        호출부에서 set_time(현재 - 1프레임)으로 구현한다.
+        """
+        self._player.next_frame()
+
     def release(self) -> None:
         """VLC 리소스를 정리한다. 앱 종료 시 호출한다.
 
