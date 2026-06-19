@@ -2,10 +2,12 @@
 
 Phase 2: 앱 창 안에 VLC 영상을 임베딩하고, '파일 열기'로 선택한 영상을 재생한다.
 Phase 3: 하단 컨트롤 바(재생/일시정지/정지)를 추가한다.
+Phase 4: 재생바(seek bar) — 진행 표시 + 드래그로 초 단위 이동, 시간 라벨.
 """
 
 import os
 
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QPalette, QColor
 from PyQt6.QtWidgets import (
     QMainWindow,
@@ -14,9 +16,24 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QPushButton,
+    QSlider,
+    QLabel,
 )
 
 from player_core import PlayerCore
+
+
+def format_time(ms: int) -> str:
+    """밀리초를 MM:SS 또는 H:MM:SS 문자열로 변환한다."""
+    if ms < 0:
+        ms = 0
+    total_seconds = ms // 1000
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    seconds = total_seconds % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 class MainWindow(QMainWindow):
@@ -28,8 +45,18 @@ class MainWindow(QMainWindow):
         self.player = PlayerCore()
         self._hwnd_attached = False
 
+        # 재생바 상태
+        self._user_dragging = False   # 사용자가 슬라이더를 잡고 있는 동안 True
+        self._duration_ms = 0         # 알려진 영상 길이 (슬라이더 범위 설정용)
+
         self._build_ui()
         self._build_menu()
+
+        # 재생 위치를 주기적으로 폴링해 슬라이더/시간 라벨 갱신
+        self._timer = QTimer(self)
+        self._timer.setInterval(200)
+        self._timer.timeout.connect(self._on_tick)
+        self._timer.start()
 
     def _build_ui(self):
         central = QWidget(self)
@@ -45,10 +72,32 @@ class MainWindow(QMainWindow):
         self.video_widget.setPalette(palette)
         layout.addWidget(self.video_widget, stretch=1)
 
+        # 재생바 (시간 라벨 + 슬라이더)
+        layout.addLayout(self._build_seek_bar())
+
         # 컨트롤 바
         layout.addLayout(self._build_control_bar())
 
         self.setCentralWidget(central)
+
+    def _build_seek_bar(self) -> QHBoxLayout:
+        bar = QHBoxLayout()
+        bar.setContentsMargins(6, 4, 6, 0)
+
+        self.current_label = QLabel("00:00")
+        self.total_label = QLabel("00:00")
+
+        self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.seek_slider.setRange(0, 0)
+        # 드래그 충돌 방지: 누르는 동안 타이머 갱신 중단, 놓을 때만 seek
+        self.seek_slider.sliderPressed.connect(self._on_slider_pressed)
+        self.seek_slider.sliderReleased.connect(self._on_slider_released)
+        self.seek_slider.sliderMoved.connect(self._on_slider_moved)
+
+        bar.addWidget(self.current_label)
+        bar.addWidget(self.seek_slider, stretch=1)
+        bar.addWidget(self.total_label)
+        return bar
 
     def _build_control_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
@@ -104,6 +153,40 @@ class MainWindow(QMainWindow):
         self.player.play()
         self.setWindowTitle(f"Frame Player - {os.path.basename(path)}")
         self.play_button.setText("⏸ 일시정지")
+
+        # 새 파일이므로 재생바 상태 초기화 (길이는 타이머가 파싱 후 채운다)
+        self._duration_ms = 0
+        self.seek_slider.setRange(0, 0)
+        self.seek_slider.setValue(0)
+        self.current_label.setText("00:00")
+        self.total_label.setText("00:00")
+
+    def _on_tick(self):
+        """주기적으로 재생 위치를 읽어 슬라이더/시간 라벨을 갱신한다."""
+        length = self.player.get_length()
+        if length > 0 and length != self._duration_ms:
+            self._duration_ms = length
+            self.seek_slider.setRange(0, length)
+            self.total_label.setText(format_time(length))
+
+        # 사용자가 드래그 중이면 슬라이더 위치를 건드리지 않는다 (값 튐 방지)
+        if not self._user_dragging:
+            t = self.player.get_time()
+            if t >= 0:
+                self.seek_slider.setValue(t)
+                self.current_label.setText(format_time(t))
+
+    def _on_slider_pressed(self):
+        self._user_dragging = True
+
+    def _on_slider_moved(self, value: int):
+        # 드래그 중에는 미리보기로 현재시간 라벨만 갱신
+        self.current_label.setText(format_time(value))
+
+    def _on_slider_released(self):
+        # 놓는 순간에만 실제 seek 수행
+        self.player.set_time(self.seek_slider.value())
+        self._user_dragging = False
 
     def toggle_play(self):
         # play()/pause() 직후의 is_playing()은 상태 반영이 지연되므로,
