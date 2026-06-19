@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QVBoxLayout,
     QHBoxLayout,
-    QPushButton,
     QSlider,
     QLabel,
     QMessageBox,
@@ -63,12 +62,6 @@ class MainWindow(QMainWindow):
         self._cached_fps = 0.0
         self._default_fps = 30.0
 
-        # ←/→ 점프 간격(초)
-        self._jump_seconds = 5
-
-        # 음소거 상태
-        self._muted = False
-
         self._build_ui()
         self._build_menu()
         self._build_shortcuts()
@@ -98,14 +91,13 @@ class MainWindow(QMainWindow):
         # 재생바 (시간 라벨 + 슬라이더)
         layout.addLayout(self._build_seek_bar())
 
-        # 컨트롤 바
-        layout.addLayout(self._build_control_bar())
-
         self.setCentralWidget(central)
 
     def _build_seek_bar(self) -> QHBoxLayout:
         bar = QHBoxLayout()
-        bar.setContentsMargins(6, 4, 6, 0)
+        # 위·아래 여백을 대칭으로 줘서 재생바 영역을 넓히고,
+        # 슬라이더와 시간 텍스트가 그 안에서 세로 중앙에 같은 높이로 정렬되게 한다.
+        bar.setContentsMargins(6, 14, 6, 14)
 
         self.current_label = QLabel("00:00")
         self.total_label = QLabel("00:00")
@@ -120,43 +112,6 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.current_label)
         bar.addWidget(self.seek_slider, stretch=1)
         bar.addWidget(self.total_label)
-        return bar
-
-    def _build_control_bar(self) -> QHBoxLayout:
-        bar = QHBoxLayout()
-        bar.setContentsMargins(6, 4, 6, 4)
-
-        self.play_button = QPushButton("▶ 재생")
-        self.play_button.clicked.connect(self.toggle_play)
-
-        self.stop_button = QPushButton("⏹ 정지")
-        self.stop_button.clicked.connect(self.stop)
-
-        self.prev_frame_button = QPushButton("◀ 프레임")
-        self.prev_frame_button.clicked.connect(self.step_backward)
-
-        self.next_frame_button = QPushButton("프레임 ▶")
-        self.next_frame_button.clicked.connect(self.step_forward)
-
-        self.mute_button = QPushButton("🔊")
-        self.mute_button.clicked.connect(self.toggle_mute)
-
-        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setRange(0, 100)
-        self.volume_slider.setValue(100)
-        self.volume_slider.setFixedWidth(100)
-        self.volume_slider.valueChanged.connect(self._on_volume_changed)
-
-        # 버튼이 키보드 포커스를 가져가면 Space가 버튼을 누르므로 포커스를 받지 않게 한다
-        for btn in (self.play_button, self.stop_button,
-                    self.prev_frame_button, self.next_frame_button):
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            bar.addWidget(btn)
-        bar.addStretch(1)
-        self.mute_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.volume_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        bar.addWidget(self.mute_button)
-        bar.addWidget(self.volume_slider)
         return bar
 
     def _build_menu(self):
@@ -181,10 +136,10 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(key), self, activated=handler)
 
         add(Qt.Key.Key_Space, self.toggle_play)
-        add(Qt.Key.Key_Left, lambda: self.jump(-self._jump_seconds))
-        add(Qt.Key.Key_Right, lambda: self.jump(self._jump_seconds))
-        add(Qt.Key.Key_Comma, self.step_backward)    # ',' 한 프레임 뒤로
-        add(Qt.Key.Key_Period, self.step_forward)    # '.' 한 프레임 앞으로
+        add(Qt.Key.Key_Left, self.step_backward)            # ← 1프레임 뒤로
+        add(Qt.Key.Key_Right, self.step_forward)            # → 1프레임 앞으로
+        add("Ctrl+Left", lambda: self._step_seconds(-1))    # Ctrl+← 1초 뒤로
+        add("Ctrl+Right", lambda: self._step_seconds(1))    # Ctrl+→ 1초 앞으로
         add(Qt.Key.Key_F, self.toggle_fullscreen)
         add(Qt.Key.Key_Escape, self.exit_fullscreen)
 
@@ -245,10 +200,7 @@ class MainWindow(QMainWindow):
 
         self.player.load(path)
         self.player.play()
-        self.player.set_volume(self.volume_slider.value())
-        self.player.set_mute(self._muted)
         self.setWindowTitle(f"Frame Player - {os.path.basename(path)}")
-        self.play_button.setText("⏸ 일시정지")
 
         # 새 파일이므로 재생바/FPS 상태 초기화 (길이·FPS는 타이머가 파싱 후 채운다)
         self._duration_ms = 0
@@ -281,10 +233,6 @@ class MainWindow(QMainWindow):
                 self._position_ms = float(t)
                 self._update_seek_ui(t)
 
-        # 끝까지 재생되어 종료되면 버튼을 '재생'으로 되돌린다
-        if self.player.has_ended() and self.play_button.text() != "▶ 재생":
-            self.play_button.setText("▶ 재생")
-
     def _update_seek_ui(self, ms: int):
         """슬라이더와 현재시간 라벨을 주어진 위치(ms)로 갱신한다."""
         self.seek_slider.setValue(int(ms))
@@ -305,8 +253,7 @@ class MainWindow(QMainWindow):
         self._user_dragging = False
 
     def toggle_play(self):
-        # play()/pause() 직후의 is_playing()은 상태 반영이 지연되므로,
-        # 동작 전 상태로 분기하고 버튼 라벨은 수행한 동작 기준으로 직접 설정한다.
+        # play()/pause() 직후의 is_playing()은 상태 반영이 지연되므로 동작 전 상태로 분기한다.
         if self.player.is_playing():
             self._pause()
         else:
@@ -314,7 +261,6 @@ class MainWindow(QMainWindow):
             if self.player.has_ended():
                 self.player.stop()
             self.player.play()
-            self.play_button.setText("⏸ 일시정지")
 
     def _pause(self):
         """일시정지하고, 이 순간의 정확한 get_time()으로 추적 위치를 동기화한다.
@@ -323,27 +269,9 @@ class MainWindow(QMainWindow):
         (next_frame()을 쓰지 않으므로 get_time()은 항상 신뢰 가능하다.)
         """
         self.player.pause()
-        self.play_button.setText("▶ 재생")
         t = self.player.get_time()
         if t >= 0:
             self._position_ms = float(t)
-
-    def stop(self):
-        self.player.stop()
-        self.play_button.setText("▶ 재생")
-
-    def toggle_mute(self):
-        self._muted = not self._muted
-        self.player.set_mute(self._muted)
-        self.mute_button.setText("🔇" if self._muted else "🔊")
-
-    def _on_volume_changed(self, value: int):
-        self.player.set_volume(value)
-        # 볼륨을 올리면 음소거를 자동 해제한다
-        if self._muted and value > 0:
-            self._muted = False
-            self.player.set_mute(False)
-            self.mute_button.setText("🔊")
 
     def _effective_fps(self) -> float:
         """프레임 이동 계산에 쓸 FPS. 캐시값이 없으면 기본값으로 폴백."""
@@ -374,6 +302,11 @@ class MainWindow(QMainWindow):
     def jump(self, seconds: float):
         """현재 위치에서 지정한 초만큼 앞/뒤로 점프한다."""
         self.seek_to(self._current_ms() + int(seconds * 1000))
+
+    def _step_seconds(self, seconds: float):
+        """재생 중이면 먼저 일시정지한 뒤, 지정한 초만큼 이동한다. (일시정지 유지)"""
+        self._pause_for_stepping()
+        self.jump(seconds)
 
     def step_forward(self):
         """한 프레임 앞으로."""
