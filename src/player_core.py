@@ -1,131 +1,132 @@
-"""VLC 재생 로직 래퍼.
+"""mpv(libmpv) 재생 로직 래퍼.
 
-Phase 1: UI 없이 python-vlc만으로 재생이 되는지 검증하기 위한 최소 구현.
-영상 임베딩(set_hwnd)은 Phase 2에서 추가한다.
+VLC 대신 libmpv를 사용한다. libmpv는 일시정지 상태에서 프레임 단위 스텝
+(frame-step / frame-back-step)과 정밀(hr-seek) 탐색을 지원하므로, 화면에
+보이는 프레임을 기준으로 정확한 프레임 이동이 가능하다.
+
+(VLC는 일시정지 시 get_time이 화면 프레임보다 몇 프레임 뒤처지고, 화면에 멈춘
+프레임을 정밀하게 주소지정할 수 없어 프레임 단위 이동에서 점프가 발생했다.)
 """
 
-import vlc
+import mpv
 
 
 class PlayerCore:
-    """libVLC를 감싼 재생 제어 래퍼."""
+    """libmpv를 감싼 재생 제어 래퍼."""
 
     def __init__(self):
-        # --quiet: 하드웨어 디코더/종료 정리 과정에서 VLC와 ffmpeg가 stderr로
-        # 출력하는 무해한 로그를 억제한다. (기능에 영향 없음)
-        self._instance = vlc.Instance("--quiet")
-        self._player = self._instance.media_player_new()
-        self._media = None
+        # mpv는 임베딩 창 핸들(wid)을 인스턴스 생성 시점에 알아야 하므로,
+        # 실제 MPV 객체는 set_hwnd에서 만든다.
+        self._player = None
+        self._loaded = False
 
     def set_hwnd(self, hwnd: int) -> None:
-        """영상을 그릴 윈도우 핸들을 지정한다. (Windows 전용)
+        """영상을 그릴 윈도우 핸들을 지정하며 MPV 인스턴스를 생성한다.
 
         주의: 위젯이 화면에 생성된(show() 이후) 시점의 winId()를 넘겨야 한다.
         """
-        self._player.set_hwnd(hwnd)
-        # VLC가 키보드/마우스를 가로채지 않게 하여 Qt가 단축키/더블클릭 이벤트를 받도록 한다.
-        self._player.video_set_key_input(False)
-        self._player.video_set_mouse_input(False)
+        self._player = mpv.MPV(
+            wid=str(int(hwnd)),
+            vo="gpu",
+            hr_seek="yes",            # 프레임 정확 탐색
+            keep_open="yes",          # 끝에서 자동 종료하지 않고 마지막 프레임 유지
+            input_default_bindings=False,
+            input_vo_keyboard=False,  # 키 입력은 Qt 단축키가 처리하도록 mpv가 가로채지 않게
+            input_cursor=False,
+            cursor_autohide="no",
+        )
 
     def load(self, path: str) -> None:
-        """파일 경로를 미디어로 로드한다."""
-        self._media = self._instance.media_new(path)
-        self._player.set_media(self._media)
+        """파일을 로드하고 재생을 시작한다."""
+        self._player.play(path)
+        self._loaded = True
 
     def play(self) -> None:
-        self._player.play()
+        if self._player:
+            self._player.pause = False
 
     def pause(self) -> None:
-        """재생/일시정지 토글이 아닌 '일시정지'. (토글은 set_pause 사용)"""
-        self._player.set_pause(1)
+        """일시정지한다."""
+        if self._player:
+            self._player.pause = True
 
     def resume(self) -> None:
-        self._player.set_pause(0)
+        self.play()
 
     def stop(self) -> None:
-        self._player.stop()
+        if self._player:
+            self._player.command("stop")
+        self._loaded = False
 
     def is_playing(self) -> bool:
-        return bool(self._player.is_playing())
+        if not self._player or not self._loaded:
+            return False
+        return not bool(self._player.pause) and not bool(self._player.eof_reached)
 
     def get_time(self) -> int:
         """현재 재생 위치 (밀리초). 아직 준비 안 됐으면 -1."""
-        return self._player.get_time()
+        if not self._player:
+            return -1
+        t = self._player.time_pos
+        return int(t * 1000) if t is not None else -1
 
     def get_length(self) -> int:
-        """전체 길이 (밀리초). 아직 파싱 안 됐으면 0 또는 -1."""
-        return self._player.get_length()
+        """전체 길이 (밀리초). 아직 파싱 안 됐으면 0."""
+        if not self._player:
+            return 0
+        d = self._player.duration
+        return int(d * 1000) if d is not None else 0
 
     def set_time(self, ms: int) -> None:
-        """지정한 위치(밀리초)로 이동."""
-        self._player.set_time(int(ms))
+        """지정한 위치(밀리초)로 정밀(hr-seek) 이동."""
+        if self._player:
+            self._player.seek(max(0, ms) / 1000.0, reference="absolute", precision="exact")
+
+    def seek_relative(self, seconds: float) -> None:
+        """현재 위치에서 지정한 초만큼 정밀 이동."""
+        if self._player:
+            self._player.seek(seconds, reference="relative", precision="exact")
+
+    def frame_step(self) -> None:
+        """일시정지 상태에서 정확히 한 프레임 앞으로."""
+        if self._player:
+            self._player.frame_step()
+
+    def frame_back_step(self) -> None:
+        """일시정지 상태에서 정확히 한 프레임 뒤로."""
+        if self._player:
+            self._player.frame_back_step()
 
     def get_fps(self) -> float:
-        """프레임레이트. 재생/파싱 전에는 0이 나올 수 있다."""
-        return self._player.get_fps()
+        """컨테이너 프레임레이트. 파싱 전에는 0이 나올 수 있다."""
+        if not self._player:
+            return 0.0
+        fps = self._player.container_fps
+        return float(fps) if fps else 0.0
 
     def has_ended(self) -> bool:
-        """재생이 끝까지 가서 종료(Ended) 상태인지."""
-        return self._player.get_state() == vlc.State.Ended
+        """재생이 끝까지 가서 종료(EOF) 상태인지."""
+        if not self._player:
+            return False
+        return bool(self._player.eof_reached)
 
     def set_volume(self, volume: int) -> None:
         """볼륨을 0~100으로 설정한다."""
-        self._player.audio_set_volume(int(volume))
+        if self._player:
+            self._player.volume = int(volume)
 
     def get_volume(self) -> int:
-        return self._player.audio_get_volume()
+        if not self._player:
+            return 100
+        v = self._player.volume
+        return int(v) if v is not None else 100
 
     def set_mute(self, muted: bool) -> None:
-        self._player.audio_set_mute(bool(muted))
+        if self._player:
+            self._player.mute = bool(muted)
 
     def release(self) -> None:
-        """VLC 리소스를 정리한다. 앱 종료 시 호출한다.
-
-        정지 후 플레이어/인스턴스를 해제하여, 하드웨어 디코더가
-        GPU 버퍼를 참조한 채로 비정상 종료되는 것을 막는다.
-        """
-        self._player.stop()
-        self._player.release()
-        self._instance.release()
-
-
-def _format_ms(ms: int) -> str:
-    if ms < 0:
-        return "--:--"
-    s = ms // 1000
-    return f"{s // 60:02d}:{s % 60:02d}"
-
-
-if __name__ == "__main__":
-    # Phase 1 검증용 스크립트.
-    # 사용법: python src/player_core.py "<영상경로>"
-    # 경로를 생략하면 TestFile 폴더의 샘플을 사용한다.
-    import sys
-    import time
-    from pathlib import Path
-
-    if len(sys.argv) >= 2:
-        video_path = sys.argv[1]
-    else:
-        # 프로젝트 루트 기준 기본 샘플
-        root = Path(__file__).resolve().parent.parent
-        sample = root / "TestFile" / "2026.04.04.mp4"
-        video_path = str(sample)
-
-    print(f"[load] {video_path}")
-    core = PlayerCore()
-    core.load(video_path)
-    core.play()
-
-    # 미디어 파싱에 약간의 시간이 필요하므로 잠시 대기 후 정보 출력.
-    time.sleep(1.0)
-    print(f"[length] {core.get_length()} ms ({_format_ms(core.get_length())})")
-    print(f"[fps]    {core.get_fps()}")
-
-    # 5초간 0.5초 간격으로 재생 위치를 출력한다.
-    for _ in range(10):
-        print(f"[time] {core.get_time()} ms ({_format_ms(core.get_time())})  playing={core.is_playing()}")
-        time.sleep(0.5)
-
-    core.stop()
-    print("[done] Phase 1 검증 종료")
+        """libmpv 리소스를 정리한다. 앱 종료 시 호출한다."""
+        if self._player:
+            self._player.terminate()
+            self._player = None

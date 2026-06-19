@@ -20,6 +20,9 @@ __pycache__/
 # 테스트용 영상 파일
 TestFile/
 
+# libmpv 런타임 (대용량 바이너리 — 빌드 PC에 별도 배치)
+libs/*.dll
+
 # 기타
 *.log
 .DS_Store
