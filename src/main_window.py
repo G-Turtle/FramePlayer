@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QLabel,
+    QMessageBox,
 )
 
 from player_core import PlayerCore
@@ -164,7 +165,15 @@ class MainWindow(QMainWindow):
             self.open_file(path)
 
     def open_file(self, path: str):
-        """파일을 로드하고 재생한다."""
+        """파일을 로드하고 재생한다. 경로가 유효하지 않으면 경고 후 무시한다."""
+        if not os.path.isfile(path):
+            QMessageBox.warning(
+                self,
+                "파일 열기 실패",
+                f"파일을 찾을 수 없습니다:\n{path}",
+            )
+            return
+
         self.player.load(path)
         self.player.play()
         self.setWindowTitle(f"Frame Player - {os.path.basename(path)}")
