@@ -5,6 +5,8 @@
 dist/
 build/
 *.spec
+# 단, 빌드 재현용 메인 spec은 버전관리에 포함
+!FramePlayer.spec
 
 # Python 캐시
 __pycache__/
