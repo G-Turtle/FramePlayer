@@ -23,6 +23,9 @@ class PlayerCore:
         주의: 위젯이 화면에 생성된(show() 이후) 시점의 winId()를 넘겨야 한다.
         """
         self._player.set_hwnd(hwnd)
+        # VLC가 키보드/마우스를 가로채지 않게 하여 Qt가 단축키/더블클릭 이벤트를 받도록 한다.
+        self._player.video_set_key_input(False)
+        self._player.video_set_mouse_input(False)
 
     def load(self, path: str) -> None:
         """파일 경로를 미디어로 로드한다."""
@@ -60,6 +63,20 @@ class PlayerCore:
     def get_fps(self) -> float:
         """프레임레이트. 재생/파싱 전에는 0이 나올 수 있다."""
         return self._player.get_fps()
+
+    def has_ended(self) -> bool:
+        """재생이 끝까지 가서 종료(Ended) 상태인지."""
+        return self._player.get_state() == vlc.State.Ended
+
+    def set_volume(self, volume: int) -> None:
+        """볼륨을 0~100으로 설정한다."""
+        self._player.audio_set_volume(int(volume))
+
+    def get_volume(self) -> int:
+        return self._player.audio_get_volume()
+
+    def set_mute(self, muted: bool) -> None:
+        self._player.audio_set_mute(bool(muted))
 
     def release(self) -> None:
         """VLC 리소스를 정리한다. 앱 종료 시 호출한다.

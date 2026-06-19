@@ -8,7 +8,7 @@ Phase 4: 재생바(seek bar) — 진행 표시 + 드래그로 초 단위 이동,
 import os
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QPalette, QColor
+from PyQt6.QtGui import QAction, QPalette, QColor, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -58,8 +58,12 @@ class MainWindow(QMainWindow):
         self._cached_fps = 0.0
         self._default_fps = 30.0
 
+        # ←/→ 점프 간격(초)
+        self._jump_seconds = 5
+
         self._build_ui()
         self._build_menu()
+        self._build_shortcuts()
 
         # 재생 위치를 주기적으로 폴링해 슬라이더/시간 라벨 갱신
         self._timer = QTimer(self)
@@ -124,10 +128,11 @@ class MainWindow(QMainWindow):
         self.next_frame_button = QPushButton("프레임 ▶")
         self.next_frame_button.clicked.connect(self.step_forward)
 
-        bar.addWidget(self.play_button)
-        bar.addWidget(self.stop_button)
-        bar.addWidget(self.prev_frame_button)
-        bar.addWidget(self.next_frame_button)
+        # 버튼이 키보드 포커스를 가져가면 Space가 버튼을 누르므로 포커스를 받지 않게 한다
+        for btn in (self.play_button, self.stop_button,
+                    self.prev_frame_button, self.next_frame_button):
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            bar.addWidget(btn)
         bar.addStretch(1)
         return bar
 
@@ -138,6 +143,21 @@ class MainWindow(QMainWindow):
 
         file_menu = self.menuBar().addMenu("파일(&F)")
         file_menu.addAction(open_action)
+
+    def _build_shortcuts(self):
+        """키보드 단축키를 등록한다.
+
+        VLC가 입력을 가로채지 않도록 set_hwnd에서 video_set_key_input(False)를
+        호출했으므로, 영상에 포커스가 있어도 이 단축키들이 동작한다.
+        """
+        def add(key, handler):
+            QShortcut(QKeySequence(key), self, activated=handler)
+
+        add(Qt.Key.Key_Space, self.toggle_play)
+        add(Qt.Key.Key_Left, lambda: self.jump(-self._jump_seconds))
+        add(Qt.Key.Key_Right, lambda: self.jump(self._jump_seconds))
+        add(Qt.Key.Key_Comma, self.step_backward)    # ',' 한 프레임 뒤로
+        add(Qt.Key.Key_Period, self.step_forward)    # '.' 한 프레임 앞으로
 
     def closeEvent(self, event):
         """앱 종료 시 VLC 리소스를 정리한 뒤 닫는다."""
@@ -263,6 +283,27 @@ class MainWindow(QMainWindow):
         """프레임 이동은 일시정지 상태에서 수행한다. 재생 중이면 멈춘다."""
         if self.player.is_playing():
             self._pause()
+
+    def _current_ms(self) -> int:
+        """현재 재생 위치(ms). 재생 중이면 get_time(), 아니면 추적 위치."""
+        if self.player.is_playing():
+            t = self.player.get_time()
+            if t >= 0:
+                return t
+        return round(self._position_ms)
+
+    def seek_to(self, ms: int):
+        """주어진 위치(ms)로 이동한다. 범위를 벗어나면 양끝으로 보정한다."""
+        ms = max(0, ms)
+        if self._duration_ms > 0:
+            ms = min(ms, self._duration_ms)
+        self.player.set_time(ms)
+        self._position_ms = float(ms)
+        self._update_seek_ui(ms)
+
+    def jump(self, seconds: float):
+        """현재 위치에서 지정한 초만큼 앞/뒤로 점프한다."""
+        self.seek_to(self._current_ms() + int(seconds * 1000))
 
     def step_forward(self):
         """한 프레임 앞으로."""
