@@ -22,9 +22,9 @@ PrivilegesRequired=lowest
 DefaultDirName={localappdata}\Programs\FramePlayer
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-; 64비트 전용
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+; 64비트 전용 (x64 및 x64 에뮬레이션 가능한 ARM64)
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 ; 설치 파일 출력 위치/이름
 OutputDir=..\dist
 OutputBaseFilename=FramePlayer-Setup-{#AppVersion}
