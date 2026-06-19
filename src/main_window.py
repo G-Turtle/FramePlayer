@@ -61,6 +61,9 @@ class MainWindow(QMainWindow):
         # ←/→ 점프 간격(초)
         self._jump_seconds = 5
 
+        # 음소거 상태
+        self._muted = False
+
         self._build_ui()
         self._build_menu()
         self._build_shortcuts()
@@ -128,12 +131,25 @@ class MainWindow(QMainWindow):
         self.next_frame_button = QPushButton("프레임 ▶")
         self.next_frame_button.clicked.connect(self.step_forward)
 
+        self.mute_button = QPushButton("🔊")
+        self.mute_button.clicked.connect(self.toggle_mute)
+
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(100)
+        self.volume_slider.setFixedWidth(100)
+        self.volume_slider.valueChanged.connect(self._on_volume_changed)
+
         # 버튼이 키보드 포커스를 가져가면 Space가 버튼을 누르므로 포커스를 받지 않게 한다
         for btn in (self.play_button, self.stop_button,
                     self.prev_frame_button, self.next_frame_button):
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             bar.addWidget(btn)
         bar.addStretch(1)
+        self.mute_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.volume_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        bar.addWidget(self.mute_button)
+        bar.addWidget(self.volume_slider)
         return bar
 
     def _build_menu(self):
@@ -196,6 +212,8 @@ class MainWindow(QMainWindow):
 
         self.player.load(path)
         self.player.play()
+        self.player.set_volume(self.volume_slider.value())
+        self.player.set_mute(self._muted)
         self.setWindowTitle(f"Frame Player - {os.path.basename(path)}")
         self.play_button.setText("⏸ 일시정지")
 
@@ -274,6 +292,19 @@ class MainWindow(QMainWindow):
     def stop(self):
         self.player.stop()
         self.play_button.setText("▶ 재생")
+
+    def toggle_mute(self):
+        self._muted = not self._muted
+        self.player.set_mute(self._muted)
+        self.mute_button.setText("🔇" if self._muted else "🔊")
+
+    def _on_volume_changed(self, value: int):
+        self.player.set_volume(value)
+        # 볼륨을 올리면 음소거를 자동 해제한다
+        if self._muted and value > 0:
+            self._muted = False
+            self.player.set_mute(False)
+            self.mute_button.setText("🔊")
 
     def _effective_fps(self) -> float:
         """프레임 이동 계산에 쓸 FPS. 캐시값이 없으면 기본값으로 폴백."""
