@@ -24,6 +24,10 @@ datas = [
 # 아이콘이 있으면 사용 (없으면 기본 아이콘)
 icon_path = "assets/icon.ico" if os.path.exists("assets/icon.ico") else None
 
+# 런타임 창/팝업/작업 표시줄 아이콘으로 쓸 icon.ico를 번들 루트(_internal)에 포함한다.
+if icon_path:
+    datas.append((icon_path, "."))
+
 
 a = Analysis(
     ["src/main.py"],
