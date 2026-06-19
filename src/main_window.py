@@ -6,6 +6,8 @@ Phase 4: 재생바(seek bar) — 진행 표시 + 드래그로 초 단위 이동,
 """
 
 import os
+import subprocess
+import tempfile
 
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QAction, QPalette, QColor, QShortcut, QKeySequence
@@ -19,9 +21,12 @@ from PyQt6.QtWidgets import (
     QSlider,
     QLabel,
     QMessageBox,
+    QProgressDialog,
 )
 
 from player_core import PlayerCore
+from version import __version__
+from updater import UpdateChecker, Downloader, is_newer
 
 
 def format_time(ms: int) -> str:
@@ -161,6 +166,10 @@ class MainWindow(QMainWindow):
 
         file_menu = self.menuBar().addMenu("파일(&F)")
         file_menu.addAction(open_action)
+
+        # 파일 메뉴 오른쪽에 '업데이트 확인' 버튼 (드롭다운 없이 바로 실행)
+        self.update_action = self.menuBar().addAction("업데이트 확인")
+        self.update_action.triggered.connect(self.check_for_update)
 
     def _build_shortcuts(self):
         """키보드 단축키를 등록한다.
@@ -389,3 +398,82 @@ class MainWindow(QMainWindow):
             self._position_ms = min(self._position_ms, float(self._duration_ms))
         self.player.set_time(round(self._position_ms))
         self._update_seek_ui(round(self._position_ms))
+
+    # ----- 업데이트 (Phase 10) -----
+
+    def check_for_update(self):
+        """GitHub 최신 릴리스를 확인한다 (백그라운드 스레드)."""
+        self.update_action.setEnabled(False)
+        self._checker = UpdateChecker()
+        self._checker.succeeded.connect(self._on_check_result)
+        self._checker.failed.connect(self._on_check_failed)
+        self._checker.finished.connect(lambda: self.update_action.setEnabled(True))
+        self._checker.start()
+
+    def _on_check_result(self, info: dict):
+        latest = info.get("version")
+        url = info.get("download_url")
+
+        if not latest:
+            QMessageBox.information(self, "업데이트 확인", "현재 사용 가능한 업데이트가 없습니다.")
+            return
+
+        if not is_newer(latest, __version__):
+            QMessageBox.information(
+                self, "업데이트 확인", f"현재 최신 버전입니다. (버전 {__version__})"
+            )
+            return
+
+        if not url:
+            QMessageBox.warning(
+                self,
+                "업데이트",
+                f"새 버전 {latest}이(가) 있으나 설치 파일을 찾지 못했습니다.\n"
+                "GitHub 릴리스 페이지에서 직접 받아주세요.",
+            )
+            return
+
+        ret = QMessageBox.question(
+            self,
+            "업데이트",
+            f"새 버전 {latest}이(가) 있습니다. (현재 {__version__})\n업데이트를 하시겠습니까?",
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            self._start_download(url)
+
+    def _on_check_failed(self, message: str):
+        QMessageBox.warning(
+            self, "업데이트 확인 실패", f"업데이트 정보를 확인할 수 없습니다.\n{message}"
+        )
+
+    def _start_download(self, url: str):
+        dest = os.path.join(tempfile.gettempdir(), "FramePlayer-Setup-update.exe")
+        self._progress = QProgressDialog("업데이트를 다운로드하는 중...", "취소", 0, 100, self)
+        self._progress.setWindowTitle("업데이트")
+        self._progress.setMinimumDuration(0)
+        self._progress.setAutoClose(False)
+        self._progress.setAutoReset(False)
+
+        self._downloader = Downloader(url, dest)
+        self._downloader.progress.connect(self._progress.setValue)
+        self._downloader.succeeded.connect(self._on_download_done)
+        self._downloader.failed.connect(self._on_download_failed)
+        self._progress.canceled.connect(self._downloader.requestInterruption)
+        self._downloader.start()
+
+    def _on_download_done(self, path: str):
+        self._progress.close()
+        QMessageBox.information(
+            self,
+            "업데이트",
+            "다운로드가 완료되었습니다. 업데이트를 설치하면 앱이 종료되었다가\n"
+            "설치 완료 후 자동으로 다시 시작됩니다.",
+        )
+        # 설치 파일을 조용히 실행한 뒤 앱을 종료한다.
+        # (설치 파일이 실행 중인 앱을 닫고 파일을 교체하며, 완료 후 자동 재시작한다)
+        subprocess.Popen([path, "/SILENT"])
+        self.close()
+
+    def _on_download_failed(self, message: str):
+        self._progress.close()
+        QMessageBox.warning(self, "업데이트 실패", f"다운로드에 실패했습니다.\n{message}")

@@ -34,6 +34,10 @@ UninstallDisplayName={#AppName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+; 업데이트 시 실행 중인 앱을 자동으로 닫고 파일을 교체한다.
+; 재시작은 아래 [Run]에서 처리하므로 RestartApplications는 끈다.
+CloseApplications=yes
+RestartApplications=no
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
@@ -66,5 +70,7 @@ Root: HKCU; Subkey: "Software\FramePlayer\Capabilities\FileAssociations"; ValueT
 Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "FramePlayer"; ValueData: "Software\FramePlayer\Capabilities"; Flags: uninsdeletevalue
 
 [Run]
-; 설치 완료 후 실행 옵션
-Filename: "{app}\{#AppExe}"; Description: "{#AppName} 실행"; Flags: nowait postinstall skipifsilent
+; 설치 완료 후 앱 실행.
+; 일반 설치: 마법사 마지막에 체크박스로 표시.
+; 무인(/SILENT) 업데이트: skipifsilent가 없으므로 자동 실행 → 앱 자동 재시작.
+Filename: "{app}\{#AppExe}"; Description: "{#AppName} 실행"; Flags: nowait postinstall
