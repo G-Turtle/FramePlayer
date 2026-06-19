@@ -56,8 +56,8 @@ HKCU\Software\RegisteredApplications → FramePlayer
 
 ## 5. 향후 작업 순서 (TODO)
 
-- [ ] GitHub 저장소 생성 및 연결
-- [ ] 프로젝트 구조 설계 (소스 폴더, requirements.txt, .gitignore 등)
+- [x] GitHub 저장소 생성 및 연결
+- [x] 프로젝트 구조 설계 (소스 폴더, requirements.txt, .gitignore 등)
 - [ ] PyQt6 + python-vlc 기본 재생 창 뼈대 작성
 - [ ] 재생바 드래그 초 단위 seek 구현
 - [ ] 프레임 단위 앞/뒤 이동 구현
