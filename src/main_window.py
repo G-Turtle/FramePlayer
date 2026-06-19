@@ -1,6 +1,6 @@
 """메인 윈도우 (UI 조립).
 
-Phase 2: 앱 창 안에 VLC 영상을 임베딩하고, '파일 열기'로 선택한 영상을 재생한다.
+Phase 2: 앱 창 안에 영상을 임베딩하고, '파일 열기'로 선택한 영상을 재생한다.
 Phase 3: 하단 컨트롤 바(재생/일시정지/정지)를 추가한다.
 Phase 4: 재생바(seek bar) — 진행 표시 + 드래그로 초 단위 이동, 시간 라벨.
 """
@@ -8,6 +8,7 @@ Phase 4: 재생바(seek bar) — 진행 표시 + 드래그로 초 단위 이동,
 import os
 import subprocess
 import tempfile
+import time
 
 from PyQt6.QtCore import Qt, QTimer, QEvent
 from PyQt6.QtGui import QAction, QPalette, QColor, QShortcut, QKeySequence
@@ -54,13 +55,8 @@ class MainWindow(QMainWindow):
         self._user_dragging = False   # 사용자가 슬라이더를 잡고 있는 동안 True
         self._duration_ms = 0         # 알려진 영상 길이 (슬라이더 범위 설정용)
 
-        # 직접 추적하는 현재 위치(ms, float).
-        # next_frame() 후 get_time()이 갱신되지 않으므로 프레임 이동의 기준값으로 사용한다.
-        self._position_ms = 0.0
-
-        # 프레임 이동용 FPS 캐시 (재생 후에야 유효, 없으면 기본 30fps)
-        self._cached_fps = 0.0
-        self._default_fps = 30.0
+        # 화살표를 누르고 있을 때 프레임/초 이동을 제한할 최소 간격(초)
+        self._step_interval = 0.1
 
         self._build_ui()
         self._build_menu()
@@ -80,11 +76,13 @@ class MainWindow(QMainWindow):
 
         # 영상 출력 영역 (검은 배경)
         self.video_widget = QWidget(self)
+        # mpv가 임베딩할 수 있도록 네이티브 윈도우로 만든다 (winId 유효화)
+        self.video_widget.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.video_widget.setAutoFillBackground(True)
         palette = self.video_widget.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor(0, 0, 0))
         self.video_widget.setPalette(palette)
-        # 영상 더블클릭으로 풀스크린 토글 (VLC 마우스 입력을 꺼서 이벤트가 Qt로 전달됨)
+        # 영상 더블클릭으로 풀스크린 토글 (mpv 마우스 입력을 꺼서 이벤트가 Qt로 전달됨)
         self.video_widget.installEventFilter(self)
         layout.addWidget(self.video_widget, stretch=1)
 
@@ -129,19 +127,38 @@ class MainWindow(QMainWindow):
     def _build_shortcuts(self):
         """키보드 단축키를 등록한다.
 
-        VLC가 입력을 가로채지 않도록 set_hwnd에서 video_set_key_input(False)를
-        호출했으므로, 영상에 포커스가 있어도 이 단축키들이 동작한다.
+        mpv가 입력을 가로채지 않도록 set_hwnd에서 input_vo_keyboard=False로
+        생성했으므로, 영상에 포커스가 있어도 이 단축키들이 동작한다.
         """
         def add(key, handler):
             QShortcut(QKeySequence(key), self, activated=handler)
 
         add(Qt.Key.Key_Space, self.toggle_play)
-        add(Qt.Key.Key_Left, self.step_backward)            # ← 1프레임 뒤로
-        add(Qt.Key.Key_Right, self.step_forward)            # → 1프레임 앞으로
-        add("Ctrl+Left", lambda: self._step_seconds(-1))    # Ctrl+← 1초 뒤로
-        add("Ctrl+Right", lambda: self._step_seconds(1))    # Ctrl+→ 1초 앞으로
+        add(Qt.Key.Key_Left, self._throttled(self.step_backward))            # ← 1프레임 뒤로
+        add(Qt.Key.Key_Right, self._throttled(self.step_forward))            # → 1프레임 앞으로
+        add("Ctrl+Left", self._throttled(lambda: self._step_seconds(-1)))    # Ctrl+← 1초 뒤로
+        add("Ctrl+Right", self._throttled(lambda: self._step_seconds(1)))    # Ctrl+→ 1초 앞으로
         add(Qt.Key.Key_F, self.toggle_fullscreen)
         add(Qt.Key.Key_Escape, self.exit_fullscreen)
+
+    def _throttled(self, handler):
+        """단축키를 누르고 있을 때 자동반복으로 핸들러가 폭주하지 않도록,
+        직전 실행으로부터 _step_interval(0.1초)이 지난 경우에만 실행한다.
+
+        키마다 독립된 마지막 실행 시각을 클로저로 갖는다.
+        (←를 누르고 있어도 → 첫 입력은 즉시 반응)
+        """
+        last = 0.0
+
+        def wrapped():
+            nonlocal last
+            now = time.monotonic()
+            if now - last < self._step_interval:
+                return
+            last = now
+            handler()
+
+        return wrapped
 
     def eventFilter(self, obj, event):
         """영상 위젯 더블클릭 시 풀스크린을 토글한다."""
@@ -164,7 +181,7 @@ class MainWindow(QMainWindow):
             self.showNormal()
 
     def closeEvent(self, event):
-        """앱 종료 시 VLC 리소스를 정리한 뒤 닫는다."""
+        """앱 종료 시 재생 리소스를 정리한 뒤 닫는다."""
         self.player.release()
         super().closeEvent(event)
 
@@ -202,10 +219,8 @@ class MainWindow(QMainWindow):
         self.player.play()
         self.setWindowTitle(f"Frame Player - {os.path.basename(path)}")
 
-        # 새 파일이므로 재생바/FPS 상태 초기화 (길이·FPS는 타이머가 파싱 후 채운다)
+        # 새 파일이므로 재생바 상태 초기화 (길이는 타이머가 파싱 후 채운다)
         self._duration_ms = 0
-        self._cached_fps = 0.0
-        self._position_ms = 0.0
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setValue(0)
         self.current_label.setText("00:00")
@@ -219,18 +234,11 @@ class MainWindow(QMainWindow):
             self.seek_slider.setRange(0, length)
             self.total_label.setText(format_time(length))
 
-        # FPS는 재생이 시작된 후에야 유효하므로 유효값을 한 번 캐시한다
-        if self._cached_fps <= 0:
-            fps = self.player.get_fps()
-            if fps and fps > 0:
-                self._cached_fps = fps
-
-        # 재생 중일 때만 get_time()으로 위치를 동기화한다.
-        # (일시정지 중에는 프레임 이동/seek 메서드가 _position_ms와 UI를 직접 갱신한다.)
-        if self.player.is_playing() and not self._user_dragging:
+        # 재생 중이든 일시정지(프레임 이동) 중이든 항상 현재 위치로 동기화한다.
+        # (mpv의 time_pos는 일시정지·프레임 스텝 이후에도 유효하다.)
+        if not self._user_dragging:
             t = self.player.get_time()
             if t >= 0:
-                self._position_ms = float(t)
                 self._update_seek_ui(t)
 
     def _update_seek_ui(self, ms: int):
@@ -249,88 +257,46 @@ class MainWindow(QMainWindow):
         # 놓는 순간에만 실제 seek 수행
         value = self.seek_slider.value()
         self.player.set_time(value)
-        self._position_ms = float(value)   # 추적 위치도 동기화
         self._user_dragging = False
 
     def toggle_play(self):
         # play()/pause() 직후의 is_playing()은 상태 반영이 지연되므로 동작 전 상태로 분기한다.
         if self.player.is_playing():
-            self._pause()
+            self.player.pause()
         else:
-            # 끝까지 재생되어 종료된 상태면 stop으로 리셋 후 처음부터 재생한다
+            # 끝까지 재생되어 종료된 상태면 처음으로 되감은 뒤 재생한다
             if self.player.has_ended():
-                self.player.stop()
+                self.player.set_time(0)
             self.player.play()
-
-    def _pause(self):
-        """일시정지하고, 이 순간의 정확한 get_time()으로 추적 위치를 동기화한다.
-
-        일시정지 시점에 _position_ms를 맞춰 두면 이후 프레임 이동의 기준이 정확해진다.
-        (next_frame()을 쓰지 않으므로 get_time()은 항상 신뢰 가능하다.)
-        """
-        self.player.pause()
-        t = self.player.get_time()
-        if t >= 0:
-            self._position_ms = float(t)
-
-    def _effective_fps(self) -> float:
-        """프레임 이동 계산에 쓸 FPS. 캐시값이 없으면 기본값으로 폴백."""
-        return self._cached_fps if self._cached_fps > 0 else self._default_fps
 
     def _pause_for_stepping(self):
         """프레임 이동은 일시정지 상태에서 수행한다. 재생 중이면 멈춘다."""
         if self.player.is_playing():
-            self._pause()
-
-    def _current_ms(self) -> int:
-        """현재 재생 위치(ms). 재생 중이면 get_time(), 아니면 추적 위치."""
-        if self.player.is_playing():
-            t = self.player.get_time()
-            if t >= 0:
-                return t
-        return round(self._position_ms)
-
-    def seek_to(self, ms: int):
-        """주어진 위치(ms)로 이동한다. 범위를 벗어나면 양끝으로 보정한다."""
-        ms = max(0, ms)
-        if self._duration_ms > 0:
-            ms = min(ms, self._duration_ms)
-        self.player.set_time(ms)
-        self._position_ms = float(ms)
-        self._update_seek_ui(ms)
-
-    def jump(self, seconds: float):
-        """현재 위치에서 지정한 초만큼 앞/뒤로 점프한다."""
-        self.seek_to(self._current_ms() + int(seconds * 1000))
+            self.player.pause()
 
     def _step_seconds(self, seconds: float):
-        """재생 중이면 먼저 일시정지한 뒤, 지정한 초만큼 이동한다. (일시정지 유지)"""
+        """재생 중이면 먼저 일시정지한 뒤, 지정한 초만큼 정밀 이동한다. (일시정지 유지)"""
         self._pause_for_stepping()
-        self.jump(seconds)
+        self.player.seek_relative(seconds)
+        self._sync_position()
 
     def step_forward(self):
-        """한 프레임 앞으로."""
-        self._step_frame(+1)
+        """한 프레임 앞으로 (mpv frame-step, 화면 프레임 기준 정확)."""
+        self._pause_for_stepping()
+        self.player.frame_step()
+        self._sync_position()
 
     def step_backward(self):
-        """한 프레임 뒤로."""
-        self._step_frame(-1)
-
-    def _step_frame(self, direction: int):
-        """프레임 이동을 set_time으로 통일 구현한다.
-
-        next_frame()은 이후 set_time을 깨뜨리는 특수 상태를 만들므로 사용하지 않고,
-        추적 위치(_position_ms)에서 ±1프레임 한 지점으로 직접 seek 한다.
-        set_time은 일시정지 상태에서 프레임 단위로 정확하다.
-        """
+        """한 프레임 뒤로 (mpv frame-back-step, 화면 프레임 기준 정확)."""
         self._pause_for_stepping()
-        frame_ms = 1000.0 / self._effective_fps()
-        self._position_ms += direction * frame_ms
-        self._position_ms = max(0.0, self._position_ms)
-        if self._duration_ms > 0:
-            self._position_ms = min(self._position_ms, float(self._duration_ms))
-        self.player.set_time(round(self._position_ms))
-        self._update_seek_ui(round(self._position_ms))
+        self.player.frame_back_step()
+        self._sync_position()
+
+    def _sync_position(self):
+        """프레임 이동/seek 직후 슬라이더·시간 라벨을 현재 위치로 갱신한다."""
+        t = self.player.get_time()
+        if t >= 0:
+            self._update_seek_ui(t)
 
     # ----- 업데이트 (Phase 10) -----
 

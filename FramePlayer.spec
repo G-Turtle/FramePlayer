@@ -1,25 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 빌드 명세 (폴더 빌드 / --onedir).
 
-VLC 런타임(libvlc.dll, libvlccore.dll, plugins/)을 함께 번들하여
-대상 PC에 VLC가 설치되지 않아도 실행되게 한다.
-빌드 PC에는 VLC가 설치되어 있어야 한다(아래 VLC_DIR 경로 참조).
+libmpv 런타임(libmpv-2.dll)을 함께 번들하여 대상 PC에 mpv가 설치되지
+않아도 실행되게 한다. libmpv-2.dll은 프로젝트 루트의 libs/ 폴더에 둔다
+(대용량 바이너리라 git에는 포함하지 않음 — README/requirements 참고).
 """
 
 import os
 
-# 빌드 PC의 VLC 설치 경로 (64비트)
-VLC_DIR = r"C:\Program Files\VideoLAN\VLC"
-
-# libvlc 본체 DLL은 번들 루트(_internal)에 둔다 → main.py가 PYTHON_VLC_LIB_PATH로 참조
+# libmpv-2.dll은 번들 루트(_internal)에 둔다 → main.py가 _MEIPASS에서 찾는다
 binaries = [
-    (os.path.join(VLC_DIR, "libvlc.dll"), "."),
-    (os.path.join(VLC_DIR, "libvlccore.dll"), "."),
+    (os.path.join("libs", "libmpv-2.dll"), "."),
 ]
-# 플러그인 폴더 전체 → _internal/plugins (main.py가 PYTHON_VLC_MODULE_PATH로 참조)
-datas = [
-    (os.path.join(VLC_DIR, "plugins"), "plugins"),
-]
+datas = []
 
 # 아이콘이 있으면 사용 (없으면 기본 아이콘)
 icon_path = "assets/icon.ico" if os.path.exists("assets/icon.ico") else None

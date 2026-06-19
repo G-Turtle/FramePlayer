@@ -3,13 +3,18 @@
 import os
 import sys
 
-# 동결(PyInstaller 빌드) 실행 시 번들된 VLC 런타임을 사용하도록 경로를 지정한다.
-# python-vlc가 이 환경변수를 우선 사용하므로, 대상 PC에 VLC가 없어도 동작한다.
-# 반드시 vlc 모듈이 import되기 전(= main_window import 전)에 설정해야 한다.
+# libmpv-2.dll 위치를 DLL 검색 경로에 추가한다. python-mpv가 이 경로에서
+# libmpv-2.dll을 찾으므로, 대상 PC에 mpv가 설치돼 있지 않아도 동작한다.
+# 반드시 mpv 모듈이 import되기 전(= main_window import 전)에 설정해야 한다.
 if getattr(sys, "frozen", False):
-    _base = sys._MEIPASS
-    os.environ.setdefault("PYTHON_VLC_LIB_PATH", os.path.join(_base, "libvlc.dll"))
-    os.environ.setdefault("PYTHON_VLC_MODULE_PATH", os.path.join(_base, "plugins"))
+    _libdir = sys._MEIPASS
+else:
+    # 개발 환경: 프로젝트 루트의 libs/ 폴더 (이 파일은 src/ 안에 있음)
+    _libdir = os.path.join(os.path.dirname(__file__), "..", "libs")
+_libdir = os.path.abspath(_libdir)
+if os.path.isdir(_libdir):
+    os.add_dll_directory(_libdir)
+    os.environ["PATH"] = _libdir + os.pathsep + os.environ.get("PATH", "")
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
