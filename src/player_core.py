@@ -15,6 +15,13 @@ class PlayerCore:
         self._player = self._instance.media_player_new()
         self._media = None
 
+    def set_hwnd(self, hwnd: int) -> None:
+        """영상을 그릴 윈도우 핸들을 지정한다. (Windows 전용)
+
+        주의: 위젯이 화면에 생성된(show() 이후) 시점의 winId()를 넘겨야 한다.
+        """
+        self._player.set_hwnd(hwnd)
+
     def load(self, path: str) -> None:
         """파일 경로를 미디어로 로드한다."""
         self._media = self._instance.media_new(path)
