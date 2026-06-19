@@ -49,6 +49,10 @@ class MainWindow(QMainWindow):
         self._user_dragging = False   # 사용자가 슬라이더를 잡고 있는 동안 True
         self._duration_ms = 0         # 알려진 영상 길이 (슬라이더 범위 설정용)
 
+        # 직접 추적하는 현재 위치(ms, float).
+        # next_frame() 후 get_time()이 갱신되지 않으므로 프레임 이동의 기준값으로 사용한다.
+        self._position_ms = 0.0
+
         # 프레임 이동용 FPS 캐시 (재생 후에야 유효, 없으면 기본 30fps)
         self._cached_fps = 0.0
         self._default_fps = 30.0
@@ -169,6 +173,7 @@ class MainWindow(QMainWindow):
         # 새 파일이므로 재생바/FPS 상태 초기화 (길이·FPS는 타이머가 파싱 후 채운다)
         self._duration_ms = 0
         self._cached_fps = 0.0
+        self._position_ms = 0.0
         self.seek_slider.setRange(0, 0)
         self.seek_slider.setValue(0)
         self.current_label.setText("00:00")
@@ -188,12 +193,19 @@ class MainWindow(QMainWindow):
             if fps and fps > 0:
                 self._cached_fps = fps
 
-        # 사용자가 드래그 중이면 슬라이더 위치를 건드리지 않는다 (값 튐 방지)
-        if not self._user_dragging:
+        # 재생 중일 때만 get_time()으로 위치를 동기화한다.
+        # (일시정지 중에는 next_frame() 때문에 get_time()이 stale하므로 신뢰하지 않고,
+        #  프레임 이동/seek 메서드가 _position_ms와 UI를 직접 갱신한다.)
+        if self.player.is_playing() and not self._user_dragging:
             t = self.player.get_time()
             if t >= 0:
-                self.seek_slider.setValue(t)
-                self.current_label.setText(format_time(t))
+                self._position_ms = float(t)
+                self._update_seek_ui(t)
+
+    def _update_seek_ui(self, ms: int):
+        """슬라이더와 현재시간 라벨을 주어진 위치(ms)로 갱신한다."""
+        self.seek_slider.setValue(int(ms))
+        self.current_label.setText(format_time(int(ms)))
 
     def _on_slider_pressed(self):
         self._user_dragging = True
@@ -204,18 +216,31 @@ class MainWindow(QMainWindow):
 
     def _on_slider_released(self):
         # 놓는 순간에만 실제 seek 수행
-        self.player.set_time(self.seek_slider.value())
+        value = self.seek_slider.value()
+        self.player.set_time(value)
+        self._position_ms = float(value)   # 추적 위치도 동기화
         self._user_dragging = False
 
     def toggle_play(self):
         # play()/pause() 직후의 is_playing()은 상태 반영이 지연되므로,
         # 동작 전 상태로 분기하고 버튼 라벨은 수행한 동작 기준으로 직접 설정한다.
         if self.player.is_playing():
-            self.player.pause()
-            self.play_button.setText("▶ 재생")
+            self._pause()
         else:
             self.player.play()
             self.play_button.setText("⏸ 일시정지")
+
+    def _pause(self):
+        """일시정지하고, 이 순간의 정확한 get_time()으로 추적 위치를 동기화한다.
+
+        일시정지 시점에 _position_ms를 맞춰 두면 이후 프레임 이동의 기준이 정확해진다.
+        (next_frame()을 쓰지 않으므로 get_time()은 항상 신뢰 가능하다.)
+        """
+        self.player.pause()
+        self.play_button.setText("▶ 재생")
+        t = self.player.get_time()
+        if t >= 0:
+            self._position_ms = float(t)
 
     def stop(self):
         self.player.stop()
@@ -228,17 +253,28 @@ class MainWindow(QMainWindow):
     def _pause_for_stepping(self):
         """프레임 이동은 일시정지 상태에서 수행한다. 재생 중이면 멈춘다."""
         if self.player.is_playing():
-            self.player.pause()
-            self.play_button.setText("▶ 재생")
+            self._pause()
 
     def step_forward(self):
         """한 프레임 앞으로."""
-        self._pause_for_stepping()
-        self.player.next_frame()
+        self._step_frame(+1)
 
     def step_backward(self):
-        """한 프레임 뒤로. (VLC 후진 API가 없어 시간 계산으로 seek)"""
+        """한 프레임 뒤로."""
+        self._step_frame(-1)
+
+    def _step_frame(self, direction: int):
+        """프레임 이동을 set_time으로 통일 구현한다.
+
+        next_frame()은 이후 set_time을 깨뜨리는 특수 상태를 만들므로 사용하지 않고,
+        추적 위치(_position_ms)에서 ±1프레임 한 지점으로 직접 seek 한다.
+        set_time은 일시정지 상태에서 프레임 단위로 정확하다.
+        """
         self._pause_for_stepping()
-        frame_ms = round(1000.0 / self._effective_fps())
-        new_time = max(0, self.player.get_time() - frame_ms)
-        self.player.set_time(new_time)
+        frame_ms = 1000.0 / self._effective_fps()
+        self._position_ms += direction * frame_ms
+        self._position_ms = max(0.0, self._position_ms)
+        if self._duration_ms > 0:
+            self._position_ms = min(self._position_ms, float(self._duration_ms))
+        self.player.set_time(round(self._position_ms))
+        self._update_seek_ui(round(self._position_ms))
