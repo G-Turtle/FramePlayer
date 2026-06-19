@@ -11,7 +11,9 @@ class PlayerCore:
     """libVLC를 감싼 재생 제어 래퍼."""
 
     def __init__(self):
-        self._instance = vlc.Instance()
+        # --quiet: 하드웨어 디코더/종료 정리 과정에서 VLC와 ffmpeg가 stderr로
+        # 출력하는 무해한 로그를 억제한다. (기능에 영향 없음)
+        self._instance = vlc.Instance("--quiet")
         self._player = self._instance.media_player_new()
         self._media = None
 
@@ -58,6 +60,16 @@ class PlayerCore:
     def get_fps(self) -> float:
         """프레임레이트. 재생/파싱 전에는 0이 나올 수 있다."""
         return self._player.get_fps()
+
+    def release(self) -> None:
+        """VLC 리소스를 정리한다. 앱 종료 시 호출한다.
+
+        정지 후 플레이어/인스턴스를 해제하여, 하드웨어 디코더가
+        GPU 버퍼를 참조한 채로 비정상 종료되는 것을 막는다.
+        """
+        self._player.stop()
+        self._player.release()
+        self._instance.release()
 
 
 def _format_ms(ms: int) -> str:

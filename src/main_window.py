@@ -73,6 +73,11 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("파일(&F)")
         file_menu.addAction(open_action)
 
+    def closeEvent(self, event):
+        """앱 종료 시 VLC 리소스를 정리한 뒤 닫는다."""
+        self.player.release()
+        super().closeEvent(event)
+
     def showEvent(self, event):
         """창이 화면에 표시된 후 영상 출력 핸들을 연결한다.
 
