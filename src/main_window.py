@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QSlider,
     QLabel,
+    QPushButton,
     QMessageBox,
     QProgressDialog,
 )
@@ -54,9 +55,17 @@ class MainWindow(QMainWindow):
         # 재생바 상태
         self._user_dragging = False   # 사용자가 슬라이더를 잡고 있는 동안 True
         self._duration_ms = 0         # 알려진 영상 길이 (슬라이더 범위 설정용)
+        self._resume_after_drag = False  # 드래그 시작 시 재생 중이었으면 종료 후 재개
+        self._last_drag_seek = 0.0    # 드래그 중 실시간 seek throttle용 마지막 실행 시각
+        self._drag_seek_interval = 0.02  # 실시간 seek 최소 간격(초) = 20ms
 
         # 화살표를 누르고 있을 때 프레임/초 이동을 제한할 최소 간격(초)
         self._step_interval = 0.1
+
+        # 볼륨 상태 — 시작 시 음소거(0)로 시작한다.
+        self._volume = 0
+        self._volume_popup = None        # 수직 사운드 패널 (lazy 생성)
+        self._volume_closed_at = 0.0     # Popup이 바깥 클릭으로 닫힌 시각 (버튼 재오픈 디바운스용)
 
         self._build_ui()
         self._build_menu()
@@ -107,10 +116,90 @@ class MainWindow(QMainWindow):
         self.seek_slider.sliderReleased.connect(self._on_slider_released)
         self.seek_slider.sliderMoved.connect(self._on_slider_moved)
 
+        # 스피커 버튼 — 시작 시 음소거 상태이므로 🔇로 시작한다.
+        self.volume_button = QPushButton("🔇")
+        self.volume_button.setFlat(True)
+        self.volume_button.setFixedWidth(32)
+        self.volume_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.volume_button.clicked.connect(self._toggle_volume_popup)
+
         bar.addWidget(self.current_label)
         bar.addWidget(self.seek_slider, stretch=1)
         bar.addWidget(self.total_label)
+        bar.addWidget(self.volume_button)
         return bar
+
+    # ----- 볼륨 (사운드 패널) -----
+
+    def _build_volume_popup(self) -> QWidget:
+        """버튼 위로 떠오르는 수직 사운드 패널을 생성한다.
+
+        Qt.Popup으로 만들어 영상(네이티브 HWND) 위에 확실히 표시되고,
+        바깥 클릭·창 비활성화(포커스 이동) 시 자동으로 닫힌다.
+        """
+        popup = QWidget(self, Qt.WindowType.Popup)
+        popup.setFixedSize(40, 140)
+
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(8, 10, 8, 10)
+
+        slider = QSlider(Qt.Orientation.Vertical, popup)
+        slider.setRange(0, 100)
+        slider.setValue(self._volume)
+        slider.valueChanged.connect(self._on_volume_changed)
+        layout.addWidget(slider, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # 패널이 닫히는 시각을 기록해 버튼 재오픈 디바운스에 쓴다.
+        # (바깥 클릭이 버튼이었던 경우 곧바로 다시 열리는 것을 막음)
+        popup.installEventFilter(self)
+
+        self._volume_slider = slider
+        return popup
+
+    def _toggle_volume_popup(self):
+        """사운드 패널을 열거나 닫는다.
+
+        패널이 바깥 클릭으로 막 닫힌 경우(버튼 클릭이 그 바깥 클릭이었던 경우)
+        곧바로 다시 열리지 않도록 짧게 디바운스한다.
+        """
+        if self._volume_popup is None:
+            self._volume_popup = self._build_volume_popup()
+
+        if self._volume_popup.isVisible():
+            self._volume_popup.hide()
+            return
+
+        # 방금(150ms 이내) 바깥 클릭으로 닫혔다면 재오픈하지 않는다.
+        if time.monotonic() - self._volume_closed_at < 0.15:
+            return
+
+        self._volume_slider.setValue(self._volume)
+
+        # 버튼 바로 위, 가로 중앙에 맞춰 배치한다.
+        popup = self._volume_popup
+        btn = self.volume_button
+        top_left = btn.mapToGlobal(btn.rect().topLeft())
+        x = top_left.x() + (btn.width() - popup.width()) // 2
+        y = top_left.y() - popup.height()
+        popup.move(x, y)
+        popup.show()
+
+    def _on_volume_changed(self, value: int):
+        """슬라이더 값으로 볼륨을 설정하고 버튼 아이콘을 갱신한다. (0 = 음소거)"""
+        self._volume = value
+        self.player.set_volume(value)
+        self._update_volume_icon()
+
+    def _update_volume_icon(self):
+        self.volume_button.setText("🔇" if self._volume == 0 else "🔊")
+
+    def changeEvent(self, event):
+        """창이 비활성화(포커스 이동)되면 사운드 패널을 닫는다. (Popup 보강)"""
+        if event.type() == QEvent.Type.WindowDeactivate and self._volume_popup is not None:
+            if self._volume_popup.isVisible():
+                self._volume_closed_at = time.monotonic()
+                self._volume_popup.hide()
+        super().changeEvent(event)
 
     def _build_menu(self):
         open_action = QAction("열기(&O)", self)
@@ -161,10 +250,13 @@ class MainWindow(QMainWindow):
         return wrapped
 
     def eventFilter(self, obj, event):
-        """영상 위젯 더블클릭 시 풀스크린을 토글한다."""
+        """영상 위젯 더블클릭 시 풀스크린을 토글하고,
+        사운드 패널이 닫히는 시각을 기록한다(버튼 재오픈 디바운스용)."""
         if obj is self.video_widget and event.type() == QEvent.Type.MouseButtonDblClick:
             self.toggle_fullscreen()
             return True
+        if obj is self._volume_popup and event.type() == QEvent.Type.Hide:
+            self._volume_closed_at = time.monotonic()
         return super().eventFilter(obj, event)
 
     def toggle_fullscreen(self):
@@ -193,6 +285,8 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if not self._hwnd_attached:
             self.player.set_hwnd(int(self.video_widget.winId()))
+            # 시작 시 음소거(볼륨 0) 상태로 둔다.
+            self.player.set_volume(self._volume)
             self._hwnd_attached = True
 
     def open_file_dialog(self):
@@ -247,17 +341,31 @@ class MainWindow(QMainWindow):
         self.current_label.setText(format_time(int(ms)))
 
     def _on_slider_pressed(self):
+        # 드래그 시작: 재생 중이었는지 기억하고 일시정지한다.
+        # (종료 후 이전 상태로 복원하기 위함)
+        self._resume_after_drag = self.player.is_playing()
+        self.player.pause()
         self._user_dragging = True
+        self._last_drag_seek = 0.0
 
     def _on_slider_moved(self, value: int):
-        # 드래그 중에는 미리보기로 현재시간 라벨만 갱신
+        # 드래그 중: 현재시간 라벨을 갱신하고, 화면을 드래그 위치에 실시간 동기화한다.
+        # sliderMoved는 매우 자주 발생하므로 20ms 간격으로 seek를 제한해 mpv 부하를 막는다.
         self.current_label.setText(format_time(value))
+        now = time.monotonic()
+        if now - self._last_drag_seek >= self._drag_seek_interval:
+            self._last_drag_seek = now
+            self.player.set_time(value)
 
     def _on_slider_released(self):
-        # 놓는 순간에만 실제 seek 수행
+        # 놓는 순간 최종 위치로 정확히 이동(throttle로 건너뛴 마지막 위치 보정).
         value = self.seek_slider.value()
         self.player.set_time(value)
         self._user_dragging = False
+        # 드래그 전 재생 중이었다면 재개한다.
+        if self._resume_after_drag:
+            self.player.play()
+            self._resume_after_drag = False
 
     def toggle_play(self):
         # play()/pause() 직후의 is_playing()은 상태 반영이 지연되므로 동작 전 상태로 분기한다.

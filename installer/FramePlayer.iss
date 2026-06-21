@@ -5,7 +5,7 @@
 ; 특징: 관리자 권한 불필요(사용자별 설치) + HKCU 파일 연결 등록
 
 #define AppName "Frame Player"
-#define AppVersion "0.1.3"
+#define AppVersion "0.1.4"
 #define AppPublisher "G-Turtle"
 #define AppExe "FramePlayer.exe"
 #define ProgId "FramePlayer.VideoFile"
