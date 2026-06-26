@@ -58,6 +58,10 @@ class PlayerCore:
             self._player.command("stop")
         self._loaded = False
 
+    def is_loaded(self) -> bool:
+        """재생할 파일이 로드되어 있는지."""
+        return self._loaded
+
     def is_playing(self) -> bool:
         if not self._player or not self._loaded:
             return False
