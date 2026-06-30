@@ -114,6 +114,11 @@ class PlayerCore:
             return False
         return bool(self._player.eof_reached)
 
+    def set_speed(self, speed: float) -> None:
+        """재생 배속을 설정한다 (1.0 = 정상 속도)."""
+        if self._player:
+            self._player.speed = float(speed)
+
     def set_volume(self, volume: int) -> None:
         """볼륨을 0~100으로 설정한다."""
         if self._player:

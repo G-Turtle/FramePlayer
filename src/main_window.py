@@ -253,10 +253,10 @@ class VolumeButton(QPushButton):
 
 
 class SeekButton(QPushButton):
-    """되감기/넘기기 버튼. 더블 삼각형(◄◄ / ►►)을 QPainter로 그린다.
+    """되감기/넘기기 버튼. 홑겹 화살표(< / >)를 QPainter로 그린다.
 
     스피커 버튼과 동일한 크기·호버 배경을 사용한다.
-    forward=True면 오른쪽(넘기기), False면 왼쪽(되감기)을 가리킨다.
+    forward=True면 오른쪽('>', 넘기기), False면 왼쪽('<', 되감기)을 가리킨다.
     """
 
     def __init__(self, forward: bool, parent=None):
@@ -287,19 +287,69 @@ class SeekButton(QPushButton):
         r = side / 2
         painter.drawEllipse(QPointF(cx, cy), r, r)
 
-        # 더블 삼각형 (흰색). forward면 오른쪽, 아니면 왼쪽으로 뒤집는다.
+        # 홑겹 화살표 (흰색 선). forward면 '>', 아니면 '<' 방향으로 그린다.
+        painter.translate(cx, cy)
+        pen = QPen(QColor(255, 255, 255), max(2.0, side * 0.09))
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        d = 1.0 if self._forward else -1.0   # '>'는 +, '<'는 -
+        w = 0.16 * side    # 화살표 가로 절반
+        h = 0.24 * side    # 화살표 세로 절반
+        path = QPainterPath()
+        path.moveTo(-w * d, -h)
+        path.lineTo(w * d, 0.0)
+        path.lineTo(-w * d, h)
+        painter.drawPath(path)
+
+        painter.end()
+
+
+class SpeedButton(QPushButton):
+    """배속 버튼. 넘기기(forward) 버튼과 똑같은 더블 삼각형(►►)을 QPainter로 그린다.
+
+    옵션·되감기/넘기기 버튼과 동일한 크기·호버 배경을 사용한다.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(33, 33)
+        self.setFlat(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def enterEvent(self, event):
+        self.update()   # 호버 배경 갱신
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        side = min(self.width(), self.height())
+        cx, cy = self.width() / 2, self.height() / 2
+
+        # 원형 배경 (호버 시 더 밝게) — 다른 버튼과 동일
+        painter.setBrush(QColor(255, 255, 255, 40 if self.underMouse() else 22))
+        r = side / 2
+        painter.drawEllipse(QPointF(cx, cy), r, r)
+
+        # 더블 삼각형 (흰색) — 넘기기 버튼(오른쪽)과 동일하게 그린다.
         painter.translate(cx, cy)
         painter.setBrush(QColor(255, 255, 255))
-        d = 1.0 if self._forward else -1.0
         w = 0.22 * side
         h = 0.34 * side
         path = QPainterPath()
         for back_x in (-0.22 * side, 0.0):
-            bx = back_x * d            # 삼각형 밑변 x
-            ax = (back_x + w) * d      # 삼각형 꼭짓점 x
-            path.moveTo(bx, -h / 2)
-            path.lineTo(bx, h / 2)
-            path.lineTo(ax, 0.0)
+            path.moveTo(back_x, -h / 2)
+            path.lineTo(back_x, h / 2)
+            path.lineTo(back_x + w, 0.0)
             path.closeSubpath()
         painter.drawPath(path)
 
@@ -329,8 +379,11 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("FramePlayer", "FramePlayer")
         self._skip_seconds = self._settings.value("skip_seconds", 10, type=int)
 
-        # 볼륨 상태 — 시작 시 음소거(0)로 시작한다.
-        self._volume = 0
+        # 재생 배속 — 시작 시 항상 1배속으로 둔다(저장하지 않음).
+        self._speed = 1.0
+
+        # 볼륨 상태 — 마지막에 설정한 값을 불러온다(최초 실행 시 음소거 0).
+        self._volume = self._settings.value("volume", 0, type=int)
         self._volume_popup = None        # 수직 사운드 패널 (lazy 생성)
         self._volume_closed_at = 0.0     # Popup이 바깥 클릭으로 닫힌 시각 (버튼 재오픈 디바운스용)
 
@@ -398,6 +451,10 @@ class MainWindow(QMainWindow):
         self.option_button = MenuButton()
         self.option_button.clicked.connect(self._open_options)
 
+        # 배속 버튼 — 메뉴 버튼 바로 오른쪽
+        self.speed_button = SpeedButton()
+        self.speed_button.clicked.connect(self._open_speed_menu)
+
         # 재생 버튼 양옆의 되감기/넘기기 (스피커 버튼과 같은 크기)
         self.rewind_button = SeekButton(forward=False)
         self.rewind_button.clicked.connect(lambda: self._skip(-self._skip_seconds))
@@ -413,6 +470,8 @@ class MainWindow(QMainWindow):
         self.volume_button.clicked.connect(self._toggle_volume_popup)
 
         row.addWidget(self.option_button)
+        row.addSpacing(8)
+        row.addWidget(self.speed_button)
         row.addStretch(1)
         row.addWidget(self.rewind_button)
         row.addSpacing(20)
@@ -464,6 +523,31 @@ class MainWindow(QMainWindow):
         """넘기기/되감기 버튼의 단위 시간(초)을 설정하고 영구 저장한다."""
         self._skip_seconds = seconds
         self._settings.setValue("skip_seconds", seconds)
+
+    def _open_speed_menu(self):
+        """배속 버튼 클릭 시 배속 선택지(x0.25 ~ x2)를 연다.
+
+        현재 선택된 배속에 체크 표시를 한다 (넘기기 시간 조절과 동일).
+        """
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        for speed in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0):
+            act = menu.addAction(f"x{speed:g}")
+            act.setCheckable(True)
+            act.setChecked(speed == self._speed)
+            act.triggered.connect(lambda _checked, s=speed: self._set_speed(s))
+            group.addAction(act)
+
+        # 배속 버튼은 창 하단에 있으므로 버튼 위쪽으로 띄운다.
+        btn = self.speed_button
+        top_left = btn.mapToGlobal(btn.rect().topLeft())
+        menu.exec(QPoint(top_left.x(), top_left.y() - menu.sizeHint().height()))
+
+    def _set_speed(self, speed: float):
+        """재생 배속을 설정한다."""
+        self._speed = speed
+        self.player.set_speed(speed)
 
     def _update_play_icon(self):
         """현재 재생 상태에 맞춰 버튼 아이콘을 갱신한다."""
@@ -525,9 +609,10 @@ class MainWindow(QMainWindow):
         popup.show()
 
     def _on_volume_changed(self, value: int):
-        """슬라이더 값으로 볼륨을 설정하고 버튼 아이콘을 갱신한다. (0 = 음소거)"""
+        """슬라이더 값으로 볼륨을 설정·저장하고 버튼 아이콘을 갱신한다. (0 = 음소거)"""
         self._volume = value
         self.player.set_volume(value)
+        self._settings.setValue("volume", value)
         self._update_volume_icon()
 
     def _update_volume_icon(self):
@@ -613,8 +698,9 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
         if not self._hwnd_attached:
             self.player.set_hwnd(int(self.video_widget.winId()))
-            # 시작 시 음소거(볼륨 0) 상태로 둔다.
+            # 마지막에 저장된 볼륨을 적용하고 버튼 아이콘도 동기화한다.
             self.player.set_volume(self._volume)
+            self._update_volume_icon()
             self._hwnd_attached = True
 
     def open_file_dialog(self):

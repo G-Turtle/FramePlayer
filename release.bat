@@ -6,7 +6,7 @@ echo ============================================
 echo   Frame Player - Release Build
 echo ============================================
 echo.
-set /p VERSION="Enter version (e.g. 0.1.1): "
+set /p VERSION="Enter version: "
 
 if "%VERSION%"=="" (
     echo.
