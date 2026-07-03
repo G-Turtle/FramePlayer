@@ -31,9 +31,16 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["PIL"],   # Pillow 미사용 — 번들에서 제외 (약 11MB 절감)
     noarchive=False,
 )
+
+# 불필요한 Qt 리소스를 번들에서 제거해 용량을 줄인다 (기능 영향 없음).
+#  - Qt6 자체 UI 번역(translations): 앱은 자체 한국어 문자열만 사용 (약 6MB)
+#  - Qt6Pdf.dll: PDF를 다루지 않음 (약 4.5MB)
+a.datas = [d for d in a.datas if "qt6\\translations" not in d[0].lower()
+           and "qt6/translations" not in d[0].lower()]
+a.binaries = [b for b in a.binaries if "qt6pdf.dll" not in b[0].lower()]
 
 pyz = PYZ(a.pure)
 

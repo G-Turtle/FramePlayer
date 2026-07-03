@@ -2,6 +2,21 @@
 
 import os
 import sys
+import tempfile
+
+
+def _cleanup_update_installer():
+    """업데이트 후 남은 임시 설치 파일(~59MB)을 시작 시 정리한다.
+
+    updater가 다운로드하는 경로와 동일하다. 방금 종료된 설치 프로세스가
+    잠시 파일을 잡고 있을 수 있으므로 실패는 무시한다.
+    """
+    path = os.path.join(tempfile.gettempdir(), "FramePlayer-Setup-update.exe")
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError:
+        pass
 
 # libmpv-2.dll 위치를 DLL 검색 경로에 추가한다. python-mpv가 이 경로에서
 # libmpv-2.dll을 찾으므로, 대상 PC에 mpv가 설치돼 있지 않아도 동작한다.
@@ -32,6 +47,8 @@ def _icon_path() -> str:
 
 
 def main():
+    _cleanup_update_installer()
+
     # Windows 작업 표시줄이 python.exe가 아닌 이 앱의 아이콘으로 표시되도록
     # 명시적 AppUserModelID를 지정한다 (창 생성 전에 호출).
     if sys.platform == "win32":
