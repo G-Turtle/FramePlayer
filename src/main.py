@@ -31,7 +31,7 @@ if os.path.isdir(_libdir):
     os.add_dll_directory(_libdir)
     os.environ["PATH"] = _libdir + os.pathsep + os.environ.get("PATH", "")
 
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QColor, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication
 
 from main_window import MainWindow
@@ -46,6 +46,27 @@ def _icon_path() -> str:
     return os.path.join(os.path.dirname(__file__), "..", "assets", "icon.ico")
 
 
+def _apply_dark_theme(app: QApplication) -> None:
+    """Keep the player controls dark regardless of the Windows theme."""
+    # Fusion honors the palette below consistently, unlike the native Windows
+    # style which can replace control colors when the system theme changes.
+    app.setStyle("Fusion")
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor("#0b0b0b"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#f5f5f5"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#151515"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#1d1d1d"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#f5f5f5"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#171717"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#f5f5f5"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#202020"))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#f5f5f5"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#3d78c5"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    app.setPalette(palette)
+
+
 def main():
     _cleanup_update_installer()
 
@@ -57,6 +78,7 @@ def main():
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("FramePlayer")
 
     app = QApplication(sys.argv)
+    _apply_dark_theme(app)
     # 앱 전역 아이콘. 모든 최상위 창과 팝업(파일 열기, 업데이트, 진행률)에 상속된다.
     app.setWindowIcon(QIcon(_icon_path()))
     window = MainWindow()

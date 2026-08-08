@@ -53,6 +53,59 @@ def format_time(ms: int) -> str:
     return f"{minutes:02d}:{seconds:02d}"
 
 
+class DirectPositionSlider(QSlider):
+    """A slider that moves directly to the clicked or dragged position."""
+
+    def _value_at(self, coordinate: float) -> int:
+        if self.orientation() == Qt.Orientation.Horizontal:
+            length = max(1, self.width() - 1)
+            position = min(length, max(0, int(round(coordinate))))
+        else:
+            length = max(1, self.height() - 1)
+            position = length - min(length, max(0, int(round(coordinate))))
+
+        if self.invertedAppearance():
+            position = length - position
+        return self.minimum() + round(
+            (self.maximum() - self.minimum()) * position / length
+        )
+
+    def _set_value_from_mouse(self, event) -> None:
+        coordinate = (
+            event.position().x()
+            if self.orientation() == Qt.Orientation.Horizontal
+            else event.position().y()
+        )
+        value = self._value_at(coordinate)
+        self.setValue(value)
+        # setValue() does not emit sliderMoved; emit it so consumers can react
+        # consistently while the slider is being dragged.
+        self.sliderMoved.emit(value)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.setSliderDown(True)
+            self._set_value_from_mouse(event)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.isSliderDown() and event.buttons() & Qt.MouseButton.LeftButton:
+            self._set_value_from_mouse(event)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.isSliderDown():
+            self._set_value_from_mouse(event)
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class PlayPauseButton(QPushButton):
     """재생/일시정지 아이콘을 QPainter로 직접 그리는 둥근 토글 버튼.
 
@@ -386,6 +439,7 @@ class MainWindow(QMainWindow):
         self._volume = self._settings.value("volume", 0, type=int)
         self._volume_popup = None        # 수직 사운드 패널 (lazy 생성)
         self._volume_closed_at = 0.0     # Popup이 바깥 클릭으로 닫힌 시각 (버튼 재오픈 디바운스용)
+        self._controls_hidden = False
 
         self._build_ui()
         self._build_shortcuts()
@@ -414,11 +468,14 @@ class MainWindow(QMainWindow):
         self.video_widget.installEventFilter(self)
         layout.addWidget(self.video_widget, stretch=1)
 
-        # 재생바 (시간 라벨 + 슬라이더)
-        layout.addLayout(self._build_seek_bar())
-
-        # 재생/일시정지 버튼 (재생바 영역 중앙 하단)
-        layout.addLayout(self._build_play_controls())
+        # 재생바와 컨트롤을 하나의 위젯으로 묶어 Tab 키로 함께 숨긴다.
+        self.controls_widget = QWidget(central)
+        controls_layout = QVBoxLayout(self.controls_widget)
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(0)
+        controls_layout.addLayout(self._build_seek_bar())
+        controls_layout.addLayout(self._build_play_controls())
+        layout.addWidget(self.controls_widget)
 
         self.setCentralWidget(central)
 
@@ -431,7 +488,7 @@ class MainWindow(QMainWindow):
         self.current_label = QLabel("00:00")
         self.total_label = QLabel("00:00")
 
-        self.seek_slider = QSlider(Qt.Orientation.Horizontal)
+        self.seek_slider = DirectPositionSlider(Qt.Orientation.Horizontal)
         self.seek_slider.setRange(0, 0)
         # 드래그 충돌 방지: 누르는 동안 타이머 갱신 중단, 놓을 때만 seek
         self.seek_slider.sliderPressed.connect(self._on_slider_pressed)
@@ -567,7 +624,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(popup)
         layout.setContentsMargins(8, 10, 8, 10)
 
-        slider = QSlider(Qt.Orientation.Vertical, popup)
+        slider = DirectPositionSlider(Qt.Orientation.Vertical, popup)
         slider.setRange(0, 100)
         slider.setValue(self._volume)
         slider.valueChanged.connect(self._on_volume_changed)
@@ -643,7 +700,13 @@ class MainWindow(QMainWindow):
         add("Shift+Left", self._throttled(lambda: self._skip(-self._skip_seconds)))   # Shift+← 되감기
         add("Shift+Right", self._throttled(lambda: self._skip(self._skip_seconds)))    # Shift+→ 넘기기
         add(Qt.Key.Key_F, self.toggle_fullscreen)
+        add(Qt.Key.Key_F, self.toggle_fullscreen)
         add(Qt.Key.Key_Escape, self.exit_fullscreen)
+
+        tab_shortcut = QShortcut(
+            QKeySequence(Qt.Key.Key_Tab), self, activated=self.toggle_controls_visibility
+        )
+        tab_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
 
     def _throttled(self, handler):
         """단축키를 누르고 있을 때 자동반복으로 핸들러가 폭주하지 않도록,
@@ -679,6 +742,13 @@ class MainWindow(QMainWindow):
             self.exit_fullscreen()
         else:
             self.showFullScreen()
+
+    def toggle_controls_visibility(self):
+        """Show or hide the bottom timeline and playback controls."""
+        self._controls_hidden = not self._controls_hidden
+        self.controls_widget.setVisible(not self._controls_hidden)
+        if self._controls_hidden and self._volume_popup is not None:
+            self._volume_popup.hide()
 
     def exit_fullscreen(self):
         # 풀스크린일 때만 동작 (Esc를 일반 상태에서 눌러도 영향 없게)
